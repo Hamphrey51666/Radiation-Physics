@@ -1,4 +1,5 @@
 import sys
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -8,666 +9,243 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QDoubleValidator
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
-    QVBoxLayout, QHBoxLayout, QLineEdit,
-    QListWidget, QComboBox, QCheckBox,
-    QFileDialog, QTabWidget, QTableWidget,
-    QTableWidgetItem, QTextEdit, QGroupBox
+    QVBoxLayout, QHBoxLayout,
+    QFileDialog, QTableWidget, QTableWidgetItem,
+    QGroupBox, QProgressBar, QSplitter,
+    QHeaderView, QComboBox, QTabWidget
 )
 
 # =========================================================
 # COMPUTATION ENGINE
 # =========================================================
 
-import numpy as np
-
 def compute_indices(df):
-
+    """
+    Compute hazard indices with uncertainty propagation.
+    Returns DataFrame with value and uncertainty in separate columns.
+    """
     df = df.copy()
-
-    # =====================================================
-    # BASE COMPUTATIONS
-    # =====================================================
-
-    rad_eq = (
-        df["Ra"] +
-        1.43 * df["Th"] +
-        0.077 * df["K"]
-    )
-
-    hex_val = (
-        (df["Ra"]/370) +
-        (df["Th"]/259) +
-        (df["K"]/4810)
-    )
-
-    hin_val = (
-        (df["Ra"]/185) +
-        (df["Th"]/259) +
-        (df["K"]/4810)
-    )
-
-    dose_rate = (
-        (df["Ra"]*0.462) +
-        (df["Th"]*0.604) +
-        (df["K"]*0.0417)
-    )
-
-    aede = (
-        dose_rate *
-        8760 *
-        0.2 *
-        1e-6
-    )
-
-    # =====================================================
-    # UNCERTAINTY EXTRACTION
-    # =====================================================
-
-    dRa = df.get("dRa", pd.Series([0]*len(df)))
-    dTh = df.get("dTh", pd.Series([0]*len(df)))
-    dK = df.get("dK", pd.Series([0]*len(df)))
-
-    # =====================================================
-    # UNCERTAINTY PROPAGATION
-    # =====================================================
-
-    dRadEq = np.sqrt(
-        (1*dRa)**2 +
-        (1.43*dTh)**2 +
-        (0.077*dK)**2
-    )
-
-    dHex = np.sqrt(
-        (dRa/370)**2 +
-        (dTh/259)**2 +
-        (dK/4810)**2
-    )
-
-    dHin = np.sqrt(
-        (dRa/185)**2 +
-        (dTh/259)**2 +
-        (dK/4810)**2
-    )
-
-    dDose = np.sqrt(
-        (0.462*dRa)**2 +
-        (0.604*dTh)**2 +
-        (0.0417*dK)**2
-    )
-
-    dAEDE = (
-        dDose *
-        8760 *
-        0.2 *
-        1e-6
-    )
-
-    # =====================================================
-    # RETURN DATAFRAME
-    # =====================================================
-
+    
+    # Extract uncertainties (default 0 if not present)
+    dRa = df.get("dRa", pd.Series([0] * len(df)))
+    dTh = df.get("dTh", pd.Series([0] * len(df)))
+    dK = df.get("dK", pd.Series([0] * len(df)))
+    
+    # Calculate values
+    rad_eq = df["Ra"] + 1.43 * df["Th"] + 0.077 * df["K"]
+    hex_val = df["Ra"]/370 + df["Th"]/259 + df["K"]/4810
+    hin_val = df["Ra"]/185 + df["Th"]/259 + df["K"]/4810
+    dose_rate = 0.462*df["Ra"] + 0.604*df["Th"] + 0.0417*df["K"]
+    aede = dose_rate * 8760 * 0.2 * 1e-6
+    
+    # Propagate uncertainties
+    dRadEq = np.sqrt((1*dRa)**2 + (1.43*dTh)**2 + (0.077*dK)**2)
+    dHex = np.sqrt((dRa/370)**2 + (dTh/259)**2 + (dK/4810)**2)
+    dHin = np.sqrt((dRa/185)**2 + (dTh/259)**2 + (dK/4810)**2)
+    dDose = np.sqrt((0.462*dRa)**2 + (0.604*dTh)**2 + (0.0417*dK)**2)
+    dAEDE = dDose * 8760 * 0.2 * 1e-6
+    
     return pd.DataFrame({
-
-        "Rad_Eq": rad_eq,
-        "dRad_Eq": dRadEq,
-
-        "Hex": hex_val,
-        "dHex": dHex,
-
-        "Hin": hin_val,
-        "dHin": dHin,
-
-        "Dose_Rate": dose_rate,
-        "dDose_Rate": dDose,
-
-        "AEDE": aede,
-        "dAEDE": dAEDE
+        "Rad_Eq": rad_eq, "dRad_Eq": dRadEq,
+        "Hex": hex_val, "dHex": dHex,
+        "Hin": hin_val, "dHin": dHin,
+        "Dose_Rate": dose_rate, "dDose_Rate": dDose,
+        "AEDE": aede, "dAEDE": dAEDE
     })
 
 # =========================================================
-# MANUAL INPUT TAB
+# MAIN APPLICATION - BATCH PROCESSING ONLY
 # =========================================================
 
-class ManualInputTab(QWidget):
+class MainApp(QWidget):
 
-    def __init__(self, parent):
+    def __init__(self):
         super().__init__()
 
-        self.parent_app = parent
-        self.sample_count = 0
-
-        self.layout = QVBoxLayout()
-
-        # ---------------------------------------------
-        # TITLE
-        # ---------------------------------------------
-
-        title = QLabel("Manual Sample Input")
-        title.setObjectName("title")
-        self.layout.addWidget(title)
-
-        # ---------------------------------------------
-        # INPUTS
-        # ---------------------------------------------
-         # validators
-        validator = QDoubleValidator()
-        self.ra = QLineEdit()
-        self.ra.setPlaceholderText("Enter Ra value")
-
-        self.th = QLineEdit()
-        self.th.setPlaceholderText("Enter Th value")
-
-        self.k = QLineEdit()
-        self.k.setPlaceholderText("Enter K value")
-
-        self.dra = QLineEdit()
-        self.dra.setPlaceholderText("Enter Ra uncertainty")
-
-        self.dth = QLineEdit()
-        self.dth.setPlaceholderText("Enter Th uncertainty")
-
-        self.dk = QLineEdit()
-        self.dk.setPlaceholderText("Enter K uncertainty")
-
-        self.dra.setValidator(validator)
-        self.dth.setValidator(validator)
-        self.dk.setValidator(validator)
-
-        self.layout.addWidget(self.dra)
-        self.layout.addWidget(self.dth)
-        self.layout.addWidget(self.dk)
-
-       
-
-        self.ra.setValidator(validator)
-        self.th.setValidator(validator)
-        self.k.setValidator(validator)
-
-        self.layout.addWidget(self.ra)
-        self.layout.addWidget(self.th)
-        self.layout.addWidget(self.k)
-
-        # ---------------------------------------------
-        # BUTTONS
-        # ---------------------------------------------
-
-        button_layout = QHBoxLayout()
-
-        self.add_btn = QPushButton("Add Sample")
-        self.clear_btn = QPushButton("Clear")
-        self.save_btn = QPushButton("Save Dataset")
-
-        button_layout.addWidget(self.add_btn)
-        button_layout.addWidget(self.clear_btn)
-        button_layout.addWidget(self.save_btn)
-
-        self.layout.addLayout(button_layout)
-
-        # ---------------------------------------------
-        # SAMPLE LIST
-        # ---------------------------------------------
-
-        self.sample_list = QListWidget()
-        self.layout.addWidget(self.sample_list)
-
-        # ---------------------------------------------
-        # STATUS
-        # ---------------------------------------------
-
-        self.counter = QLabel("Total Samples: 0")
-        self.output = QLabel("Ready")
-
-        self.layout.addWidget(self.counter)
-        self.layout.addWidget(self.output)
-
-        self.setLayout(self.layout)
-
-        # ---------------------------------------------
-        # CONNECTIONS
-        # ---------------------------------------------
-
-        self.add_btn.clicked.connect(self.add_sample)
-        self.clear_btn.clicked.connect(self.clear_fields)
-        self.save_btn.clicked.connect(self.save_dataset)
-
-    # =====================================================
-
-    def add_sample(self):
-
-        try:
-            ra = float(self.ra.text())
-            th = float(self.th.text())
-            k = float(self.k.text())
-
-            dra = float(self.dra.text())
-            dth = float(self.dth.text())
-            dk = float(self.dk.text())
-
-            self.sample_count += 1
-
-            name = f"Sample{self.sample_count}"
-
-            df = pd.DataFrame({
-                "Ra": [ra],
-                "Th": [th],
-                "K": [k],
-                "dRa": [dra],
-                "dTh": [dth],
-                "dK": [dk]  
-            })
-
-            self.parent_app.shared_samples[name] = df
-
-            self.sample_list.addItem(
-                f"{name} | "
-                f"Ra={ra}±{dra}  "
-                f"Th={th}±{dth}  "
-                f"K={k}±{dk}"
-            )
-
-            self.parent_app.csv_tab.refresh_samples()
-
-            self.counter.setText(
-                f"Total Samples: {self.sample_count}"
-            )
-
-            self.output.setText(f"{name} added successfully")
-
-            self.output.setStyleSheet("color: lightgreen;")
-
-            self.clear_fields()
-
-        except:
-            self.output.setText("Invalid numerical input")
-            self.output.setStyleSheet("color: red;")
-
-    # =====================================================
-
-    def clear_fields(self):
-
-        self.ra.clear()
-        self.th.clear()
-        self.k.clear()
-        self.dra.clear()
-        self.dth.clear()
-        self.dk.clear()
-
-    # =====================================================
-
-    def save_dataset(self):
-
-        if not self.parent_app.shared_samples:
-            self.output.setText("No samples available")
-            self.output.setStyleSheet("color: orange;")
-            return
-
-        rows = []
-
-        for name, df in self.parent_app.shared_samples.items():
-
-            rows.append([
-                name,
-                df["Ra"][0],
-                df["Th"][0],
-                df["K"][0],
-                df["dRa"][0],
-                df["dTh"][0],
-                df["dK"][0]
-                ])
-
-        final_df = pd.DataFrame(
-            rows,
-            columns=   [
-                        "Sample",
-                        "Ra", "Th", "K",
-                        "dRa", "dTh", "dK"
-                        ]
-        )
-
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Dataset",
-            "",
-            "CSV Files (*.csv)"
-        )
-
-        if path:
-
-            final_df.to_csv(path, index=False)
-
-            self.output.setText("Dataset saved")
-            self.output.setStyleSheet("color: cyan;")
-
-
-
-# CSV ANALYSIS TAB
-
-class CSVAnalysisTab(QWidget):
-
-    def __init__(self, parent):
-        super().__init__()
-
-        self.parent_app = parent
-        self.samples = {}
-        self.last_results = None
-
-        self.layout = QVBoxLayout()
-
-        # TITLE
-        
-
-        title = QLabel("Single Sample Analysis")
-        title.setObjectName("title")
-
-        self.layout.addWidget(title)
-
-       
-        # LOAD BUTTON
-      
-
-        self.load_btn = QPushButton("Load CSV File")
-        self.layout.addWidget(self.load_btn)
-
-        
-        # SAMPLE BOX
-      
-
-        self.sample_box = QComboBox()
-        self.layout.addWidget(self.sample_box)
-
-        
-        # CHECKBOXES
-
-        check_group = QGroupBox("Select Hazard Indices")
-
-        check_layout = QVBoxLayout()
-
-        self.cb_raeq = QCheckBox("Radium Equivalent")
-        self.cb_hex = QCheckBox("External Hazard")
-        self.cb_hin = QCheckBox("Internal Hazard")
-        self.cb_dose = QCheckBox("Dose Rate")
-        self.cb_aede = QCheckBox("AEDE")
-
-        check_layout.addWidget(self.cb_raeq)
-        check_layout.addWidget(self.cb_hex)
-        check_layout.addWidget(self.cb_hin)
-        check_layout.addWidget(self.cb_dose)
-        check_layout.addWidget(self.cb_aede)
-
-        check_group.setLayout(check_layout)
-
-        self.layout.addWidget(check_group)
-
-        # BUTTONS
-        
-
-        button_layout = QHBoxLayout()
-
-        self.compute_btn = QPushButton("Compute")
-        self.save_btn = QPushButton("Save Results")
-
-        button_layout.addWidget(self.compute_btn)
-        button_layout.addWidget(self.save_btn)
-
-        self.layout.addLayout(button_layout)
-
-        # RESULT TABLE
-
-        self.result_table = QTableWidget()
-        self.layout.addWidget(self.result_table)
-
-        # OUTPUT
-
-        self.output = QLabel("Ready")
-        self.layout.addWidget(self.output)
-
-        self.setLayout(self.layout)
-
-        # ---------------------------------------------
-        # CONNECTIONS
-        # ---------------------------------------------
-
-        self.load_btn.clicked.connect(self.load_csv)
-        self.compute_btn.clicked.connect(self.compute)
-        self.save_btn.clicked.connect(self.save)
-
-    # =====================================================
-
-    def refresh_samples(self):
-
-        self.sample_box.clear()
-
-        combined = {}
-
-        combined.update(self.parent_app.shared_samples)
-        combined.update(self.samples)
-
-        self.sample_box.addItems(combined.keys())
-
-    # =====================================================
-
-    def load_csv(self):
-
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select CSV",
-            "",
-            "CSV Files (*.csv)"
-        )
-
-        if not path:
-            return
-
-        try:
-
-            df = pd.read_csv(path)
-
-            data = df.iloc[2:].apply(
-                pd.to_numeric,
-                errors='coerce'
-            )
-
-            self.samples = {}
-
-            n = len(data.columns)//3
-
-            for i in range(n):
-
-                s = data.iloc[:, i*3:(i+1)*3]
-
-                s.columns = ["Ra", "Th", "K"]
-
-                self.samples[f"CSV_Sample{i+1}"] = s
-
-            self.refresh_samples()
-
-            self.output.setText("CSV Loaded Successfully")
-            self.output.setStyleSheet("color: lightgreen;")
-
-        except Exception as e:
-
-            self.output.setText("Error Loading CSV")
-            self.output.setStyleSheet("color: red;")
-
-            print(e)
-
-    # =====================================================
-
-    def compute(self):
-
-        name = self.sample_box.currentText()
-
-        if not name:
-            self.output.setText("No sample selected")
-            return
-
-        df = None
-
-        if name in self.parent_app.shared_samples:
-            df = self.parent_app.shared_samples[name]
-
-        elif name in self.samples:
-            df = self.samples[name]
-
-        if df is None:
-            return
-
-        res = compute_indices(df).iloc[0]
-
-        filtered = {}
-
-        if self.cb_raeq.isChecked():
-            filtered["Rad_Eq"] = (
-            f"{round(res['Rad_Eq'],2)} ± "
-            f"{round(res['dRad_Eq'],2)}"
-            )
-
-        if self.cb_hex.isChecked():
-            filtered["Hex"] = (
-            f"{round(res['Hex'],4)} ± "
-            f"{round(res['dHex'],4)}"
-)
-
-        if self.cb_hin.isChecked():
-            filtered["Hin"] = (
-            f"{round(res['Hin'],4)} ± "
-            f"{round(res['dHin'],4)}"
-)
-
-        if self.cb_dose.isChecked():
-            filtered["Dose_Rate"] = (
-            f"{round(res['Dose_Rate'], 2)} ± "
-            f"{round(res['dDose_Rate'], 2)}"
-            )
-
-        if self.cb_aede.isChecked():
-            filtered["AEDE"] = (
-            f"{round(res['AEDE'],6)} ± "
-            f"{round(res['dAEDE'],6)}"
-)
-
-        self.last_results = filtered
-
-        self.result_table.setRowCount(len(filtered))
-        self.result_table.setColumnCount(2)
-
-        self.result_table.setHorizontalHeaderLabels(
-            ["Index", "Value"]
-        )
-
-        for row, (key, value) in enumerate(filtered.items()):
-
-            self.result_table.setItem(
-                row,
-                0,
-                QTableWidgetItem(key)
-            )
-
-            self.result_table.setItem(
-                row,
-                1,
-                QTableWidgetItem(str(value))
-            )
-
-        self.output.setText("Computation complete")
-        self.output.setStyleSheet("color: cyan;")
-
-    # =====================================================
-
-    def save(self):
-
-        if not self.last_results:
-            self.output.setText("Nothing to save")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Results",
-            "",
-            "CSV Files (*.csv)"
-        )
-
-        if path:
-
-            pd.DataFrame(
-                [self.last_results]
-            ).to_csv(path, index=False)
-
-            self.output.setText("Results saved")
-            self.output.setStyleSheet("color: lightgreen;")
-
-
-# =========================================================
-# BATCH PROCESSING TAB
-# =========================================================
-
-class BatchProcessingTab(QWidget):
-
-    def __init__(self, parent):
-        super().__init__()
-
-        self.parent_app = parent
+        self.setWindowTitle("Radiological Hazard Assessment Tool")
+        self.resize(1400, 800)
 
         self.data = None
         self.results = None
 
-        self.layout = QVBoxLayout()
-
-        # ---------------------------------------------
-        # TITLE
-        # ---------------------------------------------
-        title = QLabel("Batch Processing")
-        title.setObjectName("title")
-        self.layout.addWidget(title)
-
-        # ---------------------------------------------
-        # PLOT AREA
-        # ---------------------------------------------
-        self.figure = Figure()
-        self.canvas = FigureCanvas(self.figure)
-        self.layout.addWidget(self.canvas)
-
-        # ---------------------------------------------
-        # BUTTONS
-        # ---------------------------------------------
-        button_layout = QHBoxLayout()
-
-        self.load_btn = QPushButton("Load Samples")
-        self.compute_btn = QPushButton("Compute All")
-        self.plot_btn = QPushButton("Plot Dose Rate Correlation")
-        self.save_plot_btn = QPushButton("Save Plot")
-        self.save_btn = QPushButton("Export Results")
-
-        button_layout.addWidget(self.load_btn)
-        button_layout.addWidget(self.compute_btn)
-        button_layout.addWidget(self.plot_btn)
-        button_layout.addWidget(self.save_plot_btn)
-        button_layout.addWidget(self.save_btn)
-
-        self.layout.addLayout(button_layout)
-
-        # ---------------------------------------------
-        # TABLE
-        # ---------------------------------------------
-        self.table = QTableWidget()
-        self.layout.addWidget(self.table)
-
-        # ---------------------------------------------
-        # OUTPUT
-        # ---------------------------------------------
-        self.output = QLabel("Ready")
-        self.layout.addWidget(self.output)
-
+        # Main layout
+        self.layout = QHBoxLayout()
         self.setLayout(self.layout)
 
         # ---------------------------------------------
-        # CONNECTIONS
+        # LEFT PANEL - CONTROLS
         # ---------------------------------------------
+        left_panel = QWidget()
+        left_panel.setFixedWidth(350)
+        left_layout = QVBoxLayout(left_panel)
+
+        # Title
+        title = QLabel("Batch Processing")
+        title.setObjectName("title")
+        left_layout.addWidget(title)
+
+        # ---------------------------------------------
+        # DATA INPUT
+        # ---------------------------------------------
+        input_group = QGroupBox("Data Input")
+        input_layout = QVBoxLayout()
+        input_group.setLayout(input_layout)
+
+        file_layout = QHBoxLayout()
+        self.load_btn = QPushButton("📂 Load CSV")
         self.load_btn.clicked.connect(self.load_csv)
-        self.compute_btn.clicked.connect(self.compute_all)
-        self.plot_btn.clicked.connect(self.plot_correlation)
+        self.file_label = QLabel("No file loaded")
+        self.file_label.setWordWrap(True)
+        file_layout.addWidget(self.load_btn)
+        file_layout.addWidget(self.file_label)
+        input_layout.addLayout(file_layout)
+
+        self.sample_info_label = QLabel("Samples: 0")
+        input_layout.addWidget(self.sample_info_label)
+
+        left_layout.addWidget(input_group)
+
+        # ---------------------------------------------
+        # CSV FORMAT INFO
+        # ---------------------------------------------
+        info_group = QGroupBox("CSV Format")
+        info_layout = QVBoxLayout()
+        info_group.setLayout(info_layout)
+
+        info_text = QLabel(
+            "Required columns:\n"
+            "Ra, Th, K (activity concentrations)\n"
+            "dRa, dTh, dK (uncertainties)\n\n"
+            "If uncertainties are not provided,\n"
+            "they will be set to zero."
+        )
+        info_text.setWordWrap(True)
+        info_layout.addWidget(info_text)
+
+        left_layout.addWidget(info_group)
+
+        # ---------------------------------------------
+        # ACTIONS
+        # ---------------------------------------------
+        action_group = QGroupBox("Actions")
+        action_layout = QVBoxLayout()
+        action_group.setLayout(action_layout)
+
+        self.process_btn = QPushButton("⚡ Process Samples")
+        self.process_btn.clicked.connect(self.compute_all)
+        self.process_btn.setEnabled(False)
+        action_layout.addWidget(self.process_btn)
+
+        self.progress_bar = QProgressBar()
+        action_layout.addWidget(self.progress_bar)
+
+        # Export buttons
+        export_layout = QHBoxLayout()
+        self.export_btn = QPushButton("📊 Export CSV")
+        self.export_btn.clicked.connect(self.save_results)
+        self.export_btn.setEnabled(False)
+
+        self.save_plot_btn = QPushButton("💾 Save Plot")
         self.save_plot_btn.clicked.connect(self.save_plot)
-        self.save_btn.clicked.connect(self.save_results)
+        self.save_plot_btn.setEnabled(False)
+
+        export_layout.addWidget(self.export_btn)
+        export_layout.addWidget(self.save_plot_btn)
+        action_layout.addLayout(export_layout)
+
+        left_layout.addWidget(action_group)
+
+        # ---------------------------------------------
+        # PLOT OPTIONS
+        # ---------------------------------------------
+        plot_group = QGroupBox("Plot Options")
+        plot_layout = QVBoxLayout()
+        plot_group.setLayout(plot_layout)
+
+        # Plot view selector
+        view_layout = QHBoxLayout()
+        view_layout.addWidget(QLabel("View:"))
+        self.plot_view = QComboBox()
+        self.plot_view.addItems([
+            "Combined (Ra + Th + K)",
+            "Ra Only",
+            "Th Only",
+            "K Only"
+        ])
+        self.plot_view.currentTextChanged.connect(self.update_plot)
+        view_layout.addWidget(self.plot_view)
+        plot_layout.addLayout(view_layout)
+
+        self.plot_btn = QPushButton("🔄 Generate Plot")
+        self.plot_btn.clicked.connect(self.update_plot)
+        self.plot_btn.setEnabled(False)
+        plot_layout.addWidget(self.plot_btn)
+
+        left_layout.addWidget(plot_group)
+
+        # ---------------------------------------------
+        # THRESHOLD INFORMATION
+        # ---------------------------------------------
+        info_group = QGroupBox("Safety Thresholds")
+        info_layout = QVBoxLayout()
+        info_group.setLayout(info_layout)
+
+        thresholds_text = QLabel(
+            "Radium Equivalent: ≤ 370 Bq/kg\n"
+            "External Hazard (Hex): ≤ 1\n"
+            "Internal Hazard (Hin): ≤ 1\n"
+            "Dose Rate: ≤ 59 nGy/h\n"
+            "Annual Effective Dose: ≤ 1 mSv/y"
+        )
+        thresholds_text.setWordWrap(True)
+        info_layout.addWidget(thresholds_text)
+
+        left_layout.addWidget(info_group)
+
+        # Status bar at bottom of left panel
+        self.status = QLabel("Ready - Load CSV data to begin")
+        self.status.setObjectName("status")
+        left_layout.addWidget(self.status)
+
+        left_layout.addStretch()
+
+        # ---------------------------------------------
+        # RIGHT PANEL - RESULTS WITH TABS
+        # ---------------------------------------------
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+
+        # Create tab widget for plot and table
+        self.tabs = QTabWidget()
+
+        # ----- PLOT TAB -----
+        plot_tab = QWidget()
+        plot_layout = QVBoxLayout(plot_tab)
+        
+        self.figure = Figure(figsize=(10, 7))
+        self.canvas = FigureCanvas(self.figure)
+        plot_layout.addWidget(self.canvas)
+        
+        self.tabs.addTab(plot_tab, "📊 Correlation Plot")
+
+        # ----- TABLE TAB -----
+        table_tab = QWidget()
+        table_layout = QVBoxLayout(table_tab)
+        
+        self.table = QTableWidget()
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table_layout.addWidget(self.table)
+        
+        self.tabs.addTab(table_tab, "📋 Results Table")
+
+        right_layout.addWidget(self.tabs)
+
+        # Set splitter sizes
+        self.layout.addWidget(left_panel)
+        self.layout.addWidget(right_panel)
+
+        # Apply styles
+        self.apply_style()
 
     # =====================================================
     # LOAD DATA
@@ -687,24 +265,30 @@ class BatchProcessingTab(QWidget):
         try:
             df = pd.read_csv(path)
 
-            required = [
-                        "Ra", "Th", "K",
-                        "dRa", "dTh", "dK"
-                        ]
+            required = ["Ra", "Th", "K", "dRa", "dTh", "dK"]
 
+            # Check for required columns, add zeros if missing
+            missing = []
             for col in required:
                 if col not in df.columns:
-                    self.output.setText("CSV must contain Ra, Th, K")
-                    return
+                    df[col] = 0.0
+                    missing.append(col)
 
-            self.data = df
+            if missing:
+                self.status.setText(f"⚠️ Columns not found, set to zero: {', '.join(missing)}")
+                self.status.setStyleSheet("color: orange;")
+            else:
+                self.status.setText(f"✅ Loaded {len(df)} samples")
+                self.status.setStyleSheet("color: lightgreen;")
 
-            self.output.setText(f"{len(df)} samples loaded")
-            self.output.setStyleSheet("color: lightgreen;")
+            self.data = df[required]
+            self.file_label.setText(f"Loaded: {path.split('/')[-1]}")
+            self.sample_info_label.setText(f"Samples: {len(self.data)}")
+            self.process_btn.setEnabled(True)
 
         except Exception as e:
-            self.output.setText("Error loading CSV")
-            self.output.setStyleSheet("color: red;")
+            self.status.setText("❌ Error loading CSV")
+            self.status.setStyleSheet("color: red;")
             print(e)
 
     # =====================================================
@@ -713,10 +297,13 @@ class BatchProcessingTab(QWidget):
     def compute_all(self):
 
         if self.data is None:
-            self.output.setText("No data loaded")
+            self.status.setText("No data loaded")
             return
 
         try:
+            self.process_btn.setEnabled(False)
+            self.progress_bar.setValue(0)
+
             df = self.data.copy()
 
             df["Sample"] = [
@@ -726,11 +313,12 @@ class BatchProcessingTab(QWidget):
 
             indices = compute_indices(df[["Ra", "Th", "K", "dRa", "dTh", "dK"]])
 
-# round to 3 dp (AEDE gets 6 dp)
-            for col in ["Rad_Eq", "dRad_Eq", "Hex", "dHex", "Hin", "dHin", "Dose_Rate", "dDose_Rate"]:
-                indices[col] = indices[col].round(3)
-            indices["AEDE"]  = indices["AEDE"].round(6)
-            indices["dAEDE"] = indices["dAEDE"].round(6)
+            # Round values (AEDE gets 6 dp, others 3 dp)
+            for col in indices.columns:
+                if "AEDE" in col:
+                    indices[col] = indices[col].round(6)
+                else:
+                    indices[col] = indices[col].round(3)
 
             indices.insert(0, "Sample", df["Sample"])
 
@@ -770,38 +358,68 @@ class BatchProcessingTab(QWidget):
 
                     self.table.setItem(i, j, item)
 
-            self.output.setText("Batch computation completed")
-            self.output.setStyleSheet("color: cyan;")
+            # Enable buttons
+            self.export_btn.setEnabled(True)
+            self.save_plot_btn.setEnabled(True)
+            self.plot_btn.setEnabled(True)
+            self.process_btn.setEnabled(True)
+            self.progress_bar.setValue(100)
+
+            safe_count = (indices["Status"] == "Safe").sum()
+            unsafe_count = (indices["Status"] == "Unsafe").sum()
+
+            self.status.setText(
+                f"✅ Processing complete! {safe_count} safe, {unsafe_count} unsafe samples"
+            )
+            self.status.setStyleSheet("color: lightgreen;")
+
+            # Switch to table tab to show results
+            self.tabs.setCurrentIndex(1)
+
+            # Generate initial plot
+            self.update_plot()
 
         except Exception as e:
-            self.output.setText("Computation Error")
-            self.output.setStyleSheet("color: red;")
+            self.status.setText("❌ Computation Error")
+            self.status.setStyleSheet("color: red;")
+            self.process_btn.setEnabled(True)
             print(e)
 
     # =====================================================
-    # PLOT CORRELATION
+    # UPDATE PLOT (Combined or Single)
     # =====================================================
-    # =====================================================
-# PLOT CORRELATION WITH UNCERTAINTY BARS
-# =====================================================
-    def plot_correlation(self):
-
+    def update_plot(self):
+        """Update the plot based on selected view"""
+        
         if self.data is None or self.results is None:
-            self.output.setText("No data to plot")
+            self.status.setText("No data to plot")
             return
+        
+        view = self.plot_view.currentText()
+        
+        if view == "Combined (Ra + Th + K)":
+            self.plot_combined()
+        elif view == "Ra Only":
+            self.plot_single("Ra", "blue", "Ra-226")
+        elif view == "Th Only":
+            self.plot_single("Th", "red", "Th-232")
+        elif view == "K Only":
+            self.plot_single("K", "green", "K-40")
+        
+        self.canvas.draw()
+        self.status.setText(f"✅ Plot updated: {view}")
+        self.status.setStyleSheet("color: cyan;")
 
-        import numpy as np
-
-    # -------------------------------------------------
-    # CLEAR OLD FIGURE
-    # -------------------------------------------------
+    # =====================================================
+    # PLOT COMBINED (All Three Nuclides)
+    # =====================================================
+    def plot_combined(self):
+        """Plot all three nuclides on one graph"""
+        
         self.figure.clear()
-
         ax = self.figure.add_subplot(111)
 
-    # -------------------------------------------------
-    # EXTRACT DATA
-    # -------------------------------------------------
+        # Extract data
         Ra = self.data["Ra"].values
         Th = self.data["Th"].values
         K = self.data["K"].values
@@ -813,156 +431,178 @@ class BatchProcessingTab(QWidget):
         Dose = self.results["Dose_Rate"].values
         dDose = self.results["dDose_Rate"].values
 
-    # -------------------------------------------------
-    # SORT FOR CLEAN PLOTTING
-    # -------------------------------------------------
+        # Sort for clean plotting
         ra_idx = np.argsort(Ra)
         th_idx = np.argsort(Th)
         k_idx = np.argsort(K)
 
-    # -------------------------------------------------
-    # SORTED VALUES
-    # -------------------------------------------------
-        Ra_s = Ra[ra_idx]
-        Th_s = Th[th_idx]
-        K_s = K[k_idx]
-
-        dRa_s = dRa[ra_idx]
-        dTh_s = dTh[th_idx]
-        dK_s = dK[k_idx]
-
-        Dose_ra = Dose[ra_idx]
-        Dose_th = Dose[th_idx]
-        Dose_k = Dose[k_idx]
-
-        dDose_ra = dDose[ra_idx]
-        dDose_th = dDose[th_idx]
-        dDose_k = dDose[k_idx]
-
-    # -------------------------------------------------
-    # ERROR BAR PLOTS
-    # -------------------------------------------------
-
-    # ----- Ra -----
+        # ---- Ra ----
         ax.errorbar(
-            Ra_s,
-            Dose_ra,
-            xerr=dRa_s,
-            yerr=dDose_ra,
+            Ra[ra_idx],
+            Dose[ra_idx],
+            xerr=dRa[ra_idx],
+            yerr=dDose[ra_idx],
             fmt='o',
             color='blue',
             ecolor='lightblue',
             elinewidth=1,
             capsize=3,
-            label='Ra'
+            label='Ra-226'
         )
+        ra_fit = np.polyfit(Ra, Dose, 1)
+        ra_line = np.poly1d(ra_fit)
+        ax.plot(Ra[ra_idx], ra_line(Ra[ra_idx]), "--", color="blue", linewidth=2)
 
-    # ----- Th -----
+        # ---- Th ----
         ax.errorbar(
-            Th_s,
-            Dose_th,
-            xerr=dTh_s,
-            yerr=dDose_th,
-            fmt='o',
+            Th[th_idx],
+            Dose[th_idx],
+            xerr=dTh[th_idx],
+            yerr=dDose[th_idx],
+            fmt='s',
             color='red',
             ecolor='pink',
             elinewidth=1,
             capsize=3,
-            label='Th'
+            label='Th-232'
         )
+        th_fit = np.polyfit(Th, Dose, 1)
+        th_line = np.poly1d(th_fit)
+        ax.plot(Th[th_idx], th_line(Th[th_idx]), "--", color="red", linewidth=2)
 
-    # ----- K -----
+        # ---- K ----
         ax.errorbar(
-            K_s,
-            Dose_k,
-            xerr=dK_s,
-            yerr=dDose_k,
-            fmt='o',
+            K[k_idx],
+            Dose[k_idx],
+            xerr=dK[k_idx],
+            yerr=dDose[k_idx],
+            fmt='^',
             color='green',
             ecolor='lightgreen',
             elinewidth=1,
             capsize=3,
-            label='K'
+            label='K-40'
         )
-
-    # -------------------------------------------------
-    # LINEAR REGRESSION
-    # -------------------------------------------------
-
-        ra_fit = np.polyfit(Ra, Dose, 1)
-        th_fit = np.polyfit(Th, Dose, 1)
         k_fit = np.polyfit(K, Dose, 1)
-
-        ra_line = np.poly1d(ra_fit)
-        th_line = np.poly1d(th_fit)
         k_line = np.poly1d(k_fit)
+        ax.plot(K[k_idx], k_line(K[k_idx]), "--", color="green", linewidth=2)
 
-        ax.plot(
-            Ra_s,
-            ra_line(Ra_s),
-            "--",
-            color="blue"
-        )
+        # ---- R² Values ----
+        ra_r2 = np.corrcoef(Ra, Dose)[0,1]**2
+        th_r2 = np.corrcoef(Th, Dose)[0,1]**2
+        k_r2 = np.corrcoef(K, Dose)[0,1]**2
 
-        ax.plot(
-            Th_s,
-            th_line(Th_s),
-            "--",
-            color="red"
-        )
+        ax.text(0.05, 0.95, f'Ra-226: R² = {ra_r2:.3f}', transform=ax.transAxes,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                color='blue')
+        ax.text(0.05, 0.90, f'Th-232: R² = {th_r2:.3f}', transform=ax.transAxes,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                color='red')
+        ax.text(0.05, 0.85, f'K-40: R² = {k_r2:.3f}', transform=ax.transAxes,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                color='green')
 
-        ax.plot(
-            K_s,
-            k_line(K_s),
-            "--",
-            color="green"
-        )
+        # ---- Formatting ----
+        ax.set_ylim(bottom=0, top=max(Dose) * 1.1)
+        ax.set_xlim(left=0)
 
-    # -------------------------------------------------
-    # AXIS SETTINGS
-    # -------------------------------------------------
+        ax.set_title("Dose Rate Correlation with All Radionuclides", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Radionuclide Concentration (Bq/kg)", fontsize=11)
+        ax.set_ylabel("Dose Rate (nGy/h)", fontsize=11)
+        ax.legend(loc='lower right')
+        ax.grid(True, alpha=0.3)
 
-        ax.set_ylim(
-            min(Dose) * 0.95,
-            max(Dose) * 1.05
-        )
+        # ---- Statistics Box ----
+        stats_text = f"""
+        Total Samples: {len(Dose)}
+        Mean Dose Rate: {np.mean(Dose):.2f} ± {np.std(Dose):.2f} nGy/h
+        Dose Rate Range: {np.min(Dose):.2f} - {np.max(Dose):.2f} nGy/h
+        """
+        ax.text(0.97, 0.03, stats_text, transform=ax.transAxes,
+                fontsize=9, verticalalignment='bottom', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
-        ax.set_title(
-            "Dose Rate Correlation Analysis\nwith Uncertainty Bars"
-     )
+        self.figure.tight_layout()
 
-        ax.set_xlabel(
-            "Radionuclide Concentration (Bq/kg)"
-        )
+    # =====================================================
+    # PLOT SINGLE NUCLIDE
+    # =====================================================
+    def plot_single(self, nuclide, color, label):
+        """Plot dose rate vs a single radionuclide"""
+        
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
 
-        ax.set_ylabel(
-            "Dose Rate (nGy/h)"
-     )
+        # Get data for specific nuclide
+        if nuclide == "Ra":
+            x = self.data["Ra"].values
+            dx = self.data["dRa"].values
+            x_label = "Ra-226 Concentration (Bq/kg)"
+        elif nuclide == "Th":
+            x = self.data["Th"].values
+            dx = self.data["dTh"].values
+            x_label = "Th-232 Concentration (Bq/kg)"
+        else:  # K
+            x = self.data["K"].values
+            dx = self.data["dK"].values
+            x_label = "K-40 Concentration (Bq/kg)"
 
-        ax.legend()
+        dose = self.results["Dose_Rate"].values
+        ddose = self.results["dDose_Rate"].values
 
-        ax.grid(True)
+        # Sort for clean plotting
+        idx = np.argsort(x)
+        x_sorted = x[idx]
+        dose_sorted = dose[idx]
+        dx_sorted = dx[idx]
+        ddose_sorted = ddose[idx]
 
-    # -------------------------------------------------
-    # DRAW CANVAS
-    # -------------------------------------------------
+        # Plot with error bars
+        ax.errorbar(x_sorted, dose_sorted, 
+                    xerr=dx_sorted, yerr=ddose_sorted,
+                    fmt='o', color=color, ecolor='lightblue',
+                    elinewidth=1, capsize=3, label=label)
 
-        self.canvas.draw()
+        # Regression line
+        fit = np.polyfit(x, dose, 1)
+        line = np.poly1d(fit)
+        ax.plot(x_sorted, line(x_sorted), '--', color=color, linewidth=2)
 
-        self.output.setText(
-         "Correlation plot with uncertainty bars updated"
-        )
+        # R² value
+        r2 = np.corrcoef(x, dose)[0,1]**2
+        ax.text(0.05, 0.95, f'R² = {r2:.3f}', transform=ax.transAxes,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-        self.output.setStyleSheet(
-            "color: cyan;"
-        )
+        # Formatting
+        ax.set_ylim(bottom=0, top=max(dose) * 1.1)
+        ax.set_xlim(left=0)
+
+        ax.set_title(f'Dose Rate vs {label} Concentration', fontsize=12, fontweight='bold')
+        ax.set_xlabel(x_label, fontsize=11)
+        ax.set_ylabel('Dose Rate (nGy/h)', fontsize=11)
+        ax.legend(loc='lower right')
+        ax.grid(True, alpha=0.3)
+
+        # Statistics box
+        stats_text = f"""
+        Samples: {len(dose)}
+        Mean {label}: {np.mean(x):.2f} ± {np.std(x):.2f} Bq/kg
+        Mean Dose: {np.mean(dose):.2f} ± {np.std(dose):.2f} nGy/h
+        Correlation: R² = {r2:.3f}
+        """
+        ax.text(0.97, 0.03, stats_text, transform=ax.transAxes,
+                fontsize=9, verticalalignment='bottom', horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+
+        self.figure.tight_layout()
+
     # =====================================================
     # SAVE PLOT
     # =====================================================
     def save_plot(self):
 
         if self.figure is None:
-            self.output.setText("No plot available")
+            self.status.setText("No plot available")
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -979,8 +619,8 @@ class BatchProcessingTab(QWidget):
                 bbox_inches="tight"
             )
 
-            self.output.setText("Plot saved successfully")
-            self.output.setStyleSheet("color: lightgreen;")
+            self.status.setText("✅ Plot saved successfully")
+            self.status.setStyleSheet("color: lightgreen;")
 
     # =====================================================
     # SAVE RESULTS
@@ -988,7 +628,7 @@ class BatchProcessingTab(QWidget):
     def save_results(self):
 
         if self.results is None:
-            self.output.setText("Nothing to save")
+            self.status.setText("Nothing to save")
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -1000,199 +640,142 @@ class BatchProcessingTab(QWidget):
 
         if path:
             self.results.to_csv(path, index=False)
-            self.output.setText("Results exported")
-            self.output.setStyleSheet("color: lightgreen;")
-# =========================================================
-# MAIN APP
-# =========================================================
+            self.status.setText("✅ Results exported")
+            self.status.setStyleSheet("color: lightgreen;")
 
-class MainApp(QWidget):
-
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle(
-            "Radiological Hazard Assessment Tool"
-        )
-
-        self.resize(1200, 750)
-
-        self.shared_samples = {}
-
-        self.layout = QVBoxLayout()
-
-        # ---------------------------------------------
-        # HEADER
-        # ---------------------------------------------
-
-        header = QLabel(
-            "Radiological Hazard Assessment Tool"
-        )
-
-        header.setObjectName("main_header")
-
-        sub = QLabel(
-            "Environmental Radiation Analysis System"
-        )
-
-        sub.setObjectName("sub_header")
-
-        self.layout.addWidget(header)
-        self.layout.addWidget(sub)
-
-        # ---------------------------------------------
-        # TABS
-        # ---------------------------------------------
-
-        self.tabs = QTabWidget()
-
-        self.manual_tab = ManualInputTab(self)
-        self.csv_tab = CSVAnalysisTab(self)
-        self.batch_tab = BatchProcessingTab(self)
-
-        self.tabs.addTab(
-            self.manual_tab,
-            "Manual Input"
-        )
-
-        self.tabs.addTab(
-            self.csv_tab,
-            "CSV Analysis"
-        )
-
-        self.tabs.addTab(
-            self.batch_tab,
-            "Batch Processing"
-        )
-
-        self.layout.addWidget(self.tabs)
-
-        # ---------------------------------------------
-        # THRESHOLD NOTES
-        # ---------------------------------------------
-
-        limits = QLabel(
-            "Thresholds  |  "
-            "Rad_Eq ≤ 370  |  "
-            "Hex ≤ 1  |  "
-            "Hin ≤ 1  |  "
-            "Dose Rate ≤ 59  |  "
-            "AEDE ≤ 1"
-        )
-
-        limits.setObjectName("limits")
-
-        self.layout.addWidget(limits)
-
-        # ---------------------------------------------
-        # FOOTER
-        # ---------------------------------------------
-
-        footer = QLabel(
-            "Developed by Hamphrey Tumusiime"
-        )
-
-        footer.setObjectName("footer")
-
-        self.layout.addWidget(footer)
-
-        self.setLayout(self.layout)
-
-        # STYLE
+    # =====================================================
+    # STYLE
+    # =====================================================
+    def apply_style(self):
 
         self.setStyleSheet("""
-
             QWidget {
                 background-color: #1e1e2f;
                 color: white;
                 font-size: 14px;
             }
 
-            QLabel#main_header {
-                font-size: 28px;
+            QLabel#title {
+                font-size: 24px;
                 font-weight: bold;
-                color: cyan;
+                color: #00d4ff;
                 padding: 10px;
             }
 
-            QLabel#sub_header {
-                font-size: 16px;
-                color: lightgray;
-                padding-bottom: 10px;
-            }
-
-            QLabel#title {
-                font-size: 20px;
+            QLabel#status {
+                padding: 10px;
+                background-color: #2b2b3d;
+                border-radius: 6px;
                 font-weight: bold;
-                color: #00d4ff;
-                padding: 5px;
             }
 
-            QLabel#footer {
-                color: gray;
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #444;
+                border-radius: 8px;
+                margin-top: 10px;
                 padding-top: 10px;
             }
 
-            QLabel#limits {
-                color: orange;
-                font-weight: bold;
-                padding: 8px;
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+                color: #00d4ff;
             }
 
             QPushButton {
                 background-color: #2d89ef;
+                border: none;
                 border-radius: 8px;
                 padding: 10px;
                 font-weight: bold;
+                color: white;
             }
 
             QPushButton:hover {
                 background-color: #45a1ff;
             }
 
-            QLineEdit {
-                padding: 8px;
-                border: 2px solid #555;
-                border-radius: 6px;
-                background-color: #2b2b3d;
+            QPushButton:disabled {
+                background-color: #444;
+                color: #888;
             }
 
             QComboBox {
                 padding: 8px;
                 border-radius: 6px;
                 background-color: #2b2b3d;
+                border: 2px solid #555;
+                color: white;
+                min-width: 150px;
             }
 
-            QListWidget {
-                background-color: #2b2b3d;
-                border-radius: 6px;
+            QComboBox::drop-down {
+                border: none;
+            }
+
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid white;
+                margin-right: 5px;
             }
 
             QTableWidget {
                 background-color: #2b2b3d;
-                gridline-color: gray;
+                gridline-color: #444;
+                alternate-background-color: #333344;
+            }
+
+            QTableWidget::item {
+                padding: 5px;
             }
 
             QHeaderView::section {
                 background-color: #444;
-                padding: 5px;
+                padding: 8px;
                 font-weight: bold;
+                border: 1px solid #555;
+            }
+
+            QProgressBar {
+                border: 2px solid #444;
+                border-radius: 6px;
+                text-align: center;
+                background-color: #2b2b3d;
+            }
+
+            QProgressBar::chunk {
+                background-color: #2d89ef;
+                border-radius: 4px;
             }
 
             QTabWidget::pane {
-                border: 1px solid gray;
+                border: 1px solid #444;
+                border-radius: 8px;
+                background-color: #1e1e2f;
             }
 
             QTabBar::tab {
-                background: #333;
-                padding: 10px;
+                background-color: #333;
+                padding: 10px 20px;
                 margin: 2px;
+                border-radius: 6px;
             }
 
             QTabBar::tab:selected {
-                background: #2d89ef;
+                background-color: #2d89ef;
             }
 
+            QTabBar::tab:hover:!selected {
+                background-color: #444;
+            }
+
+            QLabel {
+                color: white;
+            }
         """)
 
 
@@ -1200,10 +783,9 @@ class MainApp(QWidget):
 # RUN APP
 # =========================================================
 
-app = QApplication(sys.argv)
-
-window = MainApp()
-
-window.show()
-
-sys.exit(app.exec_())
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+    window = MainApp()
+    window.show()
+    sys.exit(app.exec_())
