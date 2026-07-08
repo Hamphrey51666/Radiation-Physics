@@ -1,3 +1,30 @@
+"""
+Radiological Hazard Index Calculator
+=====================================
+
+A comprehensive tool for assessing radiological hazard indices from natural radionuclides
+(Ra-226, Th-232, K-40) in environmental samples with full uncertainty propagation.
+
+
+Key Indices Computed:
+    - Radium Equivalent (Rad_Eq): Ra + 1.43*Th + 0.077*K [Bq/kg]
+    - External Hazard Index (Hex): Ra/370 + Th/259 + K/4810 [unitless]
+    - Internal Hazard Index (Hin): Ra/185 + Th/259 + K/4810 [unitless]
+    - Dose Rate: 0.462*Ra + 0.604*Th + 0.0417*K [nGy/h]
+    - Annual Effective Dose Equivalent (AEDE): Dose_Rate × 8760 × 0.2 × 10⁻⁶ [mSv/y]
+
+Safety Thresholds (WHO/IAEA Standards):
+    - Dose Rate: ≤ 59 nGy/h
+    - Radium Equivalent: ≤ 370 Bq/kg
+    - External Hazard Index: ≤ 1
+    - Internal Hazard Index: ≤ 1
+    - Annual Effective Dose: ≤ 1 mSv/y
+
+Author: Tumusiime Hamphrey
+Institution: Kyambogo University
+Date: 20/06/2026
+"""
+#import all the necessary libraries
 import sys
 import numpy as np
 import pandas as pd
@@ -15,9 +42,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QComboBox, QTabWidget
 )
 
-# =========================================================
-# COMPUTATION ENGINE
-# =========================================================
+# COMPUTATION ENGINE (carries all the necessary calculations for the indices)
 
 def compute_indices(df):
     """
@@ -26,7 +51,7 @@ def compute_indices(df):
     """
     df = df.copy()
     
-    # Extract uncertainties (default 0 if not present)
+    # Extract uncertainties (default 0 if not present for better error handling)
     dRa = df.get("dRa", pd.Series([0] * len(df)))
     dTh = df.get("dTh", pd.Series([0] * len(df)))
     dK = df.get("dK", pd.Series([0] * len(df)))
@@ -92,7 +117,7 @@ class MainApp(QWidget):
         input_group.setLayout(input_layout)
 
         file_layout = QHBoxLayout()
-        self.load_btn = QPushButton("📂 Load CSV")
+        self.load_btn = QPushButton("Load CSV")
         self.load_btn.clicked.connect(self.load_csv)
         self.file_label = QLabel("No file loaded")
         self.file_label.setWordWrap(True)
@@ -141,11 +166,11 @@ class MainApp(QWidget):
 
         # Export buttons
         export_layout = QHBoxLayout()
-        self.export_btn = QPushButton("📊 Export CSV")
+        self.export_btn = QPushButton("Export CSV")
         self.export_btn.clicked.connect(self.save_results)
         self.export_btn.setEnabled(False)
 
-        self.save_plot_btn = QPushButton("💾 Save Plot")
+        self.save_plot_btn = QPushButton("Save Plot")
         self.save_plot_btn.clicked.connect(self.save_plot)
         self.save_plot_btn.setEnabled(False)
 
@@ -176,7 +201,7 @@ class MainApp(QWidget):
         view_layout.addWidget(self.plot_view)
         plot_layout.addLayout(view_layout)
 
-        self.plot_btn = QPushButton("🔄 Generate Plot")
+        self.plot_btn = QPushButton("Generate Plot")
         self.plot_btn.clicked.connect(self.update_plot)
         self.plot_btn.setEnabled(False)
         plot_layout.addWidget(self.plot_btn)
@@ -226,7 +251,7 @@ class MainApp(QWidget):
         self.canvas = FigureCanvas(self.figure)
         plot_layout.addWidget(self.canvas)
         
-        self.tabs.addTab(plot_tab, "📊 Correlation Plot")
+        self.tabs.addTab(plot_tab, "Correlation Plot")
 
         # ----- TABLE TAB -----
         table_tab = QWidget()
@@ -236,7 +261,7 @@ class MainApp(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         table_layout.addWidget(self.table)
         
-        self.tabs.addTab(table_tab, "📋 Results Table")
+        self.tabs.addTab(table_tab, "Results Table")
 
         right_layout.addWidget(self.tabs)
 
@@ -247,9 +272,8 @@ class MainApp(QWidget):
         # Apply styles
         self.apply_style()
 
-    # =====================================================
     # LOAD DATA
-    # =====================================================
+    
     def load_csv(self):
 
         path, _ = QFileDialog.getOpenFileName(
@@ -275,10 +299,10 @@ class MainApp(QWidget):
                     missing.append(col)
 
             if missing:
-                self.status.setText(f"⚠️ Columns not found, set to zero: {', '.join(missing)}")
+                self.status.setText(f" Columns not found, set to zero: {', '.join(missing)}")
                 self.status.setStyleSheet("color: orange;")
             else:
-                self.status.setText(f"✅ Loaded {len(df)} samples")
+                self.status.setText(f"Loaded {len(df)} samples")
                 self.status.setStyleSheet("color: lightgreen;")
 
             self.data = df[required]
@@ -287,11 +311,10 @@ class MainApp(QWidget):
             self.process_btn.setEnabled(True)
 
         except Exception as e:
-            self.status.setText("❌ Error loading CSV")
+            self.status.setText(" Error loading CSV")
             self.status.setStyleSheet("color: red;")
             print(e)
 
-    # =====================================================
     # COMPUTE ALL
     # =====================================================
     def compute_all(self):
@@ -304,7 +327,7 @@ class MainApp(QWidget):
             self.process_btn.setEnabled(False)
             self.progress_bar.setValue(0)
 
-            df = self.data.copy()
+            df = self.data.copy() #obtaining a copy of the loadd data
 
             df["Sample"] = [
                 f"SAMPLE_{i+1:03d}"
@@ -344,7 +367,7 @@ class MainApp(QWidget):
             self.table.setRowCount(len(indices))
             self.table.setColumnCount(len(indices.columns))
             self.table.setHorizontalHeaderLabels(indices.columns)
-
+        #giving green and red colurs to cels with safe/ unsafe status
             for i in range(len(indices)):
                 for j in range(len(indices.columns)):
 
@@ -364,12 +387,12 @@ class MainApp(QWidget):
             self.plot_btn.setEnabled(True)
             self.process_btn.setEnabled(True)
             self.progress_bar.setValue(100)
-
+        #counting the safe and unsafe
             safe_count = (indices["Status"] == "Safe").sum()
             unsafe_count = (indices["Status"] == "Unsafe").sum()
 
             self.status.setText(
-                f"✅ Processing complete! {safe_count} safe, {unsafe_count} unsafe samples"
+                f" Processing complete! {safe_count} safe, {unsafe_count} unsafe samples"
             )
             self.status.setStyleSheet("color: lightgreen;")
 
@@ -380,12 +403,11 @@ class MainApp(QWidget):
             self.update_plot()
 
         except Exception as e:
-            self.status.setText("❌ Computation Error")
+            self.status.setText(" Computation Error")
             self.status.setStyleSheet("color: red;")
             self.process_btn.setEnabled(True)
             print(e)
 
-    # =====================================================
     # UPDATE PLOT (Combined or Single)
     # =====================================================
     def update_plot(self):
@@ -407,20 +429,20 @@ class MainApp(QWidget):
             self.plot_single("K", "green", "K-40")
         
         self.canvas.draw()
-        self.status.setText(f"✅ Plot updated: {view}")
+        self.status.setText(f"Plot updated: {view}")
         self.status.setStyleSheet("color: cyan;")
 
-    # =====================================================
     # PLOT COMBINED (All Three Nuclides)
     # =====================================================
     def plot_combined(self):
         """Plot all three nuclides on one graph"""
         
         self.figure.clear()
+        #1 column, 1 row and all that..
         ax = self.figure.add_subplot(111)
 
         # Extract data
-        Ra = self.data["Ra"].values
+        Ra = self.data["Ra"].values   #.values turns list to numpy array
         Th = self.data["Th"].values
         K = self.data["K"].values
 
@@ -431,12 +453,12 @@ class MainApp(QWidget):
         Dose = self.results["Dose_Rate"].values
         dDose = self.results["dDose_Rate"].values
 
-        # Sort for clean plotting
+        # Sort for clean plotting (maintaining order of ra,th,and k  values)
         ra_idx = np.argsort(Ra)
         th_idx = np.argsort(Th)
         k_idx = np.argsort(K)
 
-        # ---- Ra ----
+        #---- Ra ---- #apply the sorting order to the plottiing
         ax.errorbar(
             Ra[ra_idx],
             Dose[ra_idx],
@@ -449,7 +471,7 @@ class MainApp(QWidget):
             capsize=3,
             label='Ra-226'
         )
-        ra_fit = np.polyfit(Ra, Dose, 1)
+        ra_fit = np.polyfit(Ra, Dose, 1) #finds the coefficients of a ploynomial
         ra_line = np.poly1d(ra_fit)
         ax.plot(Ra[ra_idx], ra_line(Ra[ra_idx]), "--", color="blue", linewidth=2)
 
@@ -619,7 +641,7 @@ class MainApp(QWidget):
                 bbox_inches="tight"
             )
 
-            self.status.setText("✅ Plot saved successfully")
+            self.status.setText("Plot saved successfully")
             self.status.setStyleSheet("color: lightgreen;")
 
     # =====================================================
@@ -640,7 +662,7 @@ class MainApp(QWidget):
 
         if path:
             self.results.to_csv(path, index=False)
-            self.status.setText("✅ Results exported")
+            self.status.setText("Results exported")
             self.status.setStyleSheet("color: lightgreen;")
 
     # =====================================================
@@ -779,10 +801,8 @@ class MainApp(QWidget):
         """)
 
 
-# =========================================================
 # RUN APP
-# =========================================================
-
+#run the application if this script is executed directly
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
